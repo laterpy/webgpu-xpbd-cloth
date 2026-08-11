@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1067" viewBox="0 0 1600 1067">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9ba6ad"/>
+      <stop offset="0.5" stop-color="#d4c7ae"/>
+      <stop offset="1" stop-color="#807460"/>
+    </linearGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#544c40"/>
+      <stop offset="1" stop-color="#211f1c"/>
+    </linearGradient>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="table" tableValues="0 .08"/></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="1600" height="1067" fill="url(#sky)"/>
+  <path d="M0 625 C250 545 410 590 625 515 C850 435 1035 505 1600 335 L1600 1067 L0 1067Z" fill="#6e6756"/>
+  <path d="M0 730 C315 620 520 730 790 635 C1110 520 1330 640 1600 560 L1600 1067 L0 1067Z" fill="url(#ground)"/>
+  <circle cx="1220" cy="250" r="105" fill="#efe0bd" opacity=".72"/>
+  <path d="M720 1067 L875 1067 L843 660 L770 660Z" fill="#c7b78f" opacity=".82"/>
+  <rect width="1600" height="1067" filter="url(#grain)" opacity=".55"/>
+  <text x="92" y="952" fill="#f1eadb" font-size="30" font-family="Arial, sans-serif" letter-spacing="8" opacity=".8">HANGING LIGHT</text>
+  <text x="96" y="1002" fill="#f1eadb" font-size="17" font-family="Arial, sans-serif" letter-spacing="4" opacity=".55">WEBGPU / XPBD MATERIAL STUDY</text>
+</svg>
