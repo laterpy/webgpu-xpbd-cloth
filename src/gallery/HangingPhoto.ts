@@ -17,7 +17,7 @@ export class HangingPhoto {
   readonly width: number;
   readonly height: number;
   readonly cloth: ClothSimulation;
-  readonly texture: THREE.Texture;
+  texture: THREE.Texture;
 
   private readonly leftClip: THREE.Mesh;
   private readonly rightClip: THREE.Mesh;
@@ -93,6 +93,27 @@ export class HangingPhoto {
 
     // Initial reset compute
     this.cloth.reset(renderer);
+
+    if (data.imageSrc) {
+      this.loadExternalTexture(data.imageSrc);
+    }
+  }
+
+  private async loadExternalTexture(source: string): Promise<void> {
+    try {
+      const texture = await new THREE.TextureLoader().loadAsync(source);
+      if (this.disposed) {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 8;
+      this.cloth.setTexture(texture);
+      this.texture = texture;
+    } catch (error) {
+      // Keep the deterministic procedural artwork when an optional resource is unavailable.
+      console.warn(`Gallery photo resource unavailable: ${source}`, error);
+    }
   }
 
   setHover(active: boolean, localX = 0, localY = 0, strength = 0.6): void {

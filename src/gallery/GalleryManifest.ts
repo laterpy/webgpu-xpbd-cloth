@@ -1,18 +1,30 @@
 import * as THREE from 'three/webgpu';
 import { GalleryItemData } from './GalleryItem';
 
+export type RoomLayoutType =
+  | 'circular'
+  | 'semicircle'
+  | 'angled-vista'
+  | 'staggered'
+  | 'linear'
+  | 'central-sculpture'
+  | 'studio-grid'
+  | 'archive-matrix';
+
 export interface RoomConfig {
   id: string;
   name: string;
   enName: string;
+  quote: string;
   description: string;
+  layoutType: RoomLayoutType;
+  gridRow: number; // 0 = upper floor, 1 = lower floor
+  gridCol: number; // 0, 1, 2, 3
   ambientLightColor: number;
   ambientIntensity: number;
   spotlightColor: number;
   spotlightIntensity: number;
   wallColor: number;
-  floorRoughness: number;
-  floorMetalness: number;
   windStrength: number;
   gravityStrength: number;
   items: GalleryItemData[];
@@ -21,7 +33,7 @@ export interface RoomConfig {
 // Generate procedural museum-grade art textures with film grain, atmospheric gradients, and lighting
 export function createArtworkTexture(item: GalleryItemData): THREE.Texture {
   const width = 1600;
-  const height = Math.round(width / item.aspectRatio);
+  const height = Math.round(width / (item.aspectRatio > 0 ? item.aspectRatio : 1.5));
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -48,8 +60,8 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
   const grad = ctx.createLinearGradient(0, 0, 0, h);
 
   switch (id) {
+    // 1. Travel Room
     case 'golden-peak': {
-      // Golden Peak: Morning sun hitting majestic alpine summit
       grad.addColorStop(0, '#101726');
       grad.addColorStop(0.35, '#28364d');
       grad.addColorStop(0.65, '#e09853');
@@ -58,14 +70,12 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Distant sky glow
       const glow = ctx.createRadialGradient(w * 0.5, h * 0.55, 50, w * 0.5, h * 0.55, w * 0.6);
       glow.addColorStop(0, 'rgba(255, 220, 150, 0.45)');
       glow.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, w, h);
 
-      // Back Mountain ridge
       ctx.fillStyle = '#1c2230';
       ctx.beginPath();
       ctx.moveTo(0, h * 0.85);
@@ -77,7 +87,6 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.lineTo(0, h);
       ctx.fill();
 
-      // Main Golden Peak
       const peakGrad = ctx.createLinearGradient(w * 0.5, h * 0.28, w * 0.8, h * 0.9);
       peakGrad.addColorStop(0, '#ffdf99');
       peakGrad.addColorStop(0.3, '#de9045');
@@ -90,21 +99,10 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.lineTo(w * 0.52, h * 0.28);
       ctx.lineTo(w * 0.88, h);
       ctx.fill();
-
-      // Snow ridges & light highlights
-      ctx.fillStyle = 'rgba(255, 245, 225, 0.75)';
-      ctx.beginPath();
-      ctx.moveTo(w * 0.5, h * 0.28);
-      ctx.lineTo(w * 0.51, h * 0.45);
-      ctx.lineTo(w * 0.42, h * 0.62);
-      ctx.lineTo(w * 0.38, h * 0.8);
-      ctx.lineTo(w * 0.5, h * 0.28);
-      ctx.fill();
       break;
     }
 
     case 'solitude-mist': {
-      // Nordic Fjord in mist
       grad.addColorStop(0, '#0c151c');
       grad.addColorStop(0.4, '#1b2d38');
       grad.addColorStop(0.7, '#425866');
@@ -112,39 +110,27 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Fjord water reflection line
       const waterGrad = ctx.createLinearGradient(0, h * 0.65, 0, h);
       waterGrad.addColorStop(0, '#2d3e47');
       waterGrad.addColorStop(1, '#080d12');
       ctx.fillStyle = waterGrad;
       ctx.fillRect(0, h * 0.65, w, h * 0.35);
 
-      // Soft fjord mountain silhouettes
       ctx.fillStyle = '#111a21';
       ctx.beginPath();
       ctx.moveTo(0, h * 0.4);
       ctx.lineTo(w * 0.35, h * 0.68);
       ctx.lineTo(0, h * 0.68);
       ctx.fill();
-
       ctx.beginPath();
       ctx.moveTo(w, h * 0.35);
       ctx.lineTo(w * 0.6, h * 0.68);
       ctx.lineTo(w, h * 0.68);
       ctx.fill();
-
-      // Atmospheric mist layer
-      const mistGrad = ctx.createLinearGradient(0, h * 0.55, 0, h * 0.75);
-      mistGrad.addColorStop(0, 'rgba(180, 210, 225, 0.4)');
-      mistGrad.addColorStop(0.5, 'rgba(210, 230, 240, 0.7)');
-      mistGrad.addColorStop(1, 'rgba(180, 210, 225, 0)');
-      ctx.fillStyle = mistGrad;
-      ctx.fillRect(0, h * 0.55, w, h * 0.2);
       break;
     }
 
     case 'dawn-monolith': {
-      // Iceland Black Sand beach with basalt stacks at dawn
       grad.addColorStop(0, '#0b0c14');
       grad.addColorStop(0.3, '#1c1b2b');
       grad.addColorStop(0.65, '#bd634e');
@@ -153,15 +139,6 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Ocean & surf
-      const surfGrad = ctx.createLinearGradient(0, h * 0.7, 0, h);
-      surfGrad.addColorStop(0, '#363745');
-      surfGrad.addColorStop(0.3, '#cfc8c2');
-      surfGrad.addColorStop(1, '#0e0f12');
-      ctx.fillStyle = surfGrad;
-      ctx.fillRect(0, h * 0.7, w, h * 0.3);
-
-      // Monolith sea stacks
       ctx.fillStyle = '#0a0a0f';
       ctx.beginPath();
       ctx.moveTo(w * 0.55, h * 0.72);
@@ -169,190 +146,92 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.lineTo(w * 0.62, h * 0.46);
       ctx.lineTo(w * 0.66, h * 0.72);
       ctx.fill();
-
-      ctx.beginPath();
-      ctx.moveTo(w * 0.7, h * 0.72);
-      ctx.lineTo(w * 0.72, h * 0.56);
-      ctx.lineTo(w * 0.76, h * 0.72);
-      ctx.fill();
       break;
     }
 
-    case 'kyoto-rain': {
-      // Kyoto night rain with glowing paper lanterns
-      grad.addColorStop(0, '#090a10');
-      grad.addColorStop(0.5, '#13141f');
-      grad.addColorStop(0.8, '#262024');
-      grad.addColorStop(1, '#110e14');
+    // 2. Portrait Room
+    case 'portrait-elder': {
+      grad.addColorStop(0, '#0d0d10');
+      grad.addColorStop(0.6, '#1a181e');
+      grad.addColorStop(1, '#120f14');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Warm lantern radial glow
-      const lantern = ctx.createRadialGradient(w * 0.35, h * 0.45, 10, w * 0.35, h * 0.45, w * 0.4);
-      lantern.addColorStop(0, 'rgba(255, 160, 60, 0.9)');
-      lantern.addColorStop(0.3, 'rgba(255, 120, 40, 0.4)');
-      lantern.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = lantern;
+      const light = ctx.createRadialGradient(w * 0.5, h * 0.4, 20, w * 0.5, h * 0.4, w * 0.45);
+      light.addColorStop(0, 'rgba(255, 230, 200, 0.85)');
+      light.addColorStop(0.3, 'rgba(180, 130, 100, 0.4)');
+      light.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = light;
       ctx.fillRect(0, 0, w, h);
 
-      // Wet cobblestone reflections
-      const wetRoad = ctx.createLinearGradient(0, h * 0.68, 0, h);
-      wetRoad.addColorStop(0, 'rgba(255, 160, 70, 0.35)');
-      wetRoad.addColorStop(0.5, 'rgba(20, 20, 30, 0.8)');
-      wetRoad.addColorStop(1, 'rgba(10, 10, 15, 0.95)');
-      ctx.fillStyle = wetRoad;
-      ctx.fillRect(0, h * 0.68, w, h * 0.32);
-
-      // Traditional pagoda eaves silhouette
-      ctx.fillStyle = '#06070a';
+      ctx.fillStyle = '#1e1c22';
       ctx.beginPath();
-      ctx.moveTo(w * 0.1, h * 0.3);
-      ctx.quadraticCurveTo(w * 0.35, h * 0.38, w * 0.6, h * 0.32);
-      ctx.lineTo(w * 0.55, h * 0.42);
-      ctx.lineTo(w * 0.15, h * 0.4);
+      ctx.ellipse(w * 0.5, h * 0.45, w * 0.18, h * 0.26, 0, 0, Math.PI * 2);
       ctx.fill();
       break;
     }
 
-    case 'sahara-whisper': {
-      // Sahara wind patterns in sand
-      grad.addColorStop(0, '#1c151b');
-      grad.addColorStop(0.4, '#4a2824');
-      grad.addColorStop(0.7, '#c96838');
-      grad.addColorStop(0.85, '#e89e5a');
-      grad.addColorStop(1, '#572d17');
+    case 'portrait-child': {
+      grad.addColorStop(0, '#12141a');
+      grad.addColorStop(0.5, '#1e2330');
+      grad.addColorStop(1, '#141720');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Sand dune curves
-      ctx.fillStyle = '#a64f28';
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.65);
-      ctx.bezierCurveTo(w * 0.3, h * 0.5, w * 0.7, h * 0.75, w, h * 0.58);
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.fill();
-
-      ctx.fillStyle = '#612a14';
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.78);
-      ctx.bezierCurveTo(w * 0.4, h * 0.85, w * 0.6, h * 0.68, w, h * 0.82);
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.fill();
-      break;
-    }
-
-    case 'pacific-coast': {
-      // California Pacific Coast sunset
-      grad.addColorStop(0, '#161426');
-      grad.addColorStop(0.35, '#52294c');
-      grad.addColorStop(0.6, '#b54e4a');
-      grad.addColorStop(0.75, '#e89158');
-      grad.addColorStop(0.85, '#f5c678');
-      grad.addColorStop(1, '#1b2230');
-      ctx.fillStyle = grad;
+      const light = ctx.createRadialGradient(w * 0.48, h * 0.42, 20, w * 0.48, h * 0.42, w * 0.4);
+      light.addColorStop(0, 'rgba(255, 240, 220, 0.9)');
+      light.addColorStop(0.35, 'rgba(120, 160, 200, 0.3)');
+      light.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = light;
       ctx.fillRect(0, 0, w, h);
-
-      // Ocean surf reflection
-      const ocean = ctx.createLinearGradient(0, h * 0.78, 0, h);
-      ocean.addColorStop(0, '#f5c678');
-      ocean.addColorStop(0.4, '#382e3f');
-      ocean.addColorStop(1, '#0e121a');
-      ctx.fillStyle = ocean;
-      ctx.fillRect(0, h * 0.78, w, h * 0.22);
       break;
     }
 
-    case 'architectural-echoes': {
-      // Monochrome Minimalist brutalist concrete & sharp shadows
-      grad.addColorStop(0, '#141416');
-      grad.addColorStop(0.5, '#2e2e33');
-      grad.addColorStop(1, '#18181a');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-
-      // Diagonal concrete beam shadow
-      ctx.fillStyle = '#08080a';
-      ctx.beginPath();
-      ctx.moveTo(w * 0.1, 0);
-      ctx.lineTo(w * 0.9, h);
-      ctx.lineTo(0, h);
-      ctx.lineTo(0, 0);
-      ctx.fill();
-
-      // Light beam
-      const beam = ctx.createLinearGradient(w * 0.4, 0, w * 0.8, h);
-      beam.addColorStop(0, 'rgba(240, 240, 245, 0.85)');
-      beam.addColorStop(0.6, 'rgba(180, 180, 190, 0.4)');
-      beam.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = beam;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.35, 0);
-      ctx.lineTo(w * 0.6, 0);
-      ctx.lineTo(w * 0.95, h * 0.8);
-      ctx.lineTo(w * 0.7, h * 0.8);
-      ctx.fill();
-      break;
-    }
-
-    case 'violinist-hands': {
-      // Monochrome Hands of the Violinist in theater darkness
+    case 'portrait-gaze': {
       grad.addColorStop(0, '#0a0a0c');
-      grad.addColorStop(0.6, '#18181c');
-      grad.addColorStop(1, '#0d0d10');
+      grad.addColorStop(0.7, '#1f1c22');
+      grad.addColorStop(1, '#0e0d10');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Focused spotlight on center
-      const spot = ctx.createRadialGradient(w * 0.5, h * 0.5, 30, w * 0.5, h * 0.5, w * 0.4);
-      spot.addColorStop(0, 'rgba(230, 230, 235, 0.75)');
-      spot.addColorStop(0.4, 'rgba(120, 120, 130, 0.25)');
-      spot.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = spot;
+      const light = ctx.createLinearGradient(0, 0, w, h);
+      light.addColorStop(0, 'rgba(255, 210, 160, 0.6)');
+      light.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = light;
       ctx.fillRect(0, 0, w, h);
-
-      // Violin wood curves
-      ctx.fillStyle = '#222226';
-      ctx.beginPath();
-      ctx.ellipse(w * 0.52, h * 0.55, w * 0.25, h * 0.18, -Math.PI / 6, 0, Math.PI * 2);
-      ctx.fill();
       break;
     }
 
-    case 'winter-branches': {
-      // Hokkaido solitary tree in vast snowfield
-      grad.addColorStop(0, '#b8bcc4');
-      grad.addColorStop(0.5, '#d6dae0');
-      grad.addColorStop(0.75, '#edf0f5');
-      grad.addColorStop(1, '#f2f4f8');
+    // 3. Memory Room
+    case 'memory-relic': {
+      grad.addColorStop(0, '#1a1410');
+      grad.addColorStop(0.5, '#3d2b1c');
+      grad.addColorStop(0.8, '#8c5d33');
+      grad.addColorStop(1, '#1a120c');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Minimalist tree trunk & branches
-      ctx.strokeStyle = '#18191c';
-      ctx.lineWidth = 12;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.5, h * 0.78);
-      ctx.lineTo(w * 0.5, h * 0.48);
-      ctx.stroke();
-
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.5, h * 0.58);
-      ctx.lineTo(w * 0.42, h * 0.42);
-      ctx.moveTo(w * 0.5, h * 0.54);
-      ctx.lineTo(w * 0.58, h * 0.38);
-      ctx.moveTo(w * 0.42, h * 0.42);
-      ctx.lineTo(w * 0.36, h * 0.35);
-      ctx.moveTo(w * 0.58, h * 0.38);
-      ctx.lineTo(w * 0.64, h * 0.32);
-      ctx.stroke();
+      const halo = ctx.createRadialGradient(w * 0.5, h * 0.5, 40, w * 0.5, h * 0.5, w * 0.45);
+      halo.addColorStop(0, 'rgba(255, 215, 120, 0.85)');
+      halo.addColorStop(0.5, 'rgba(200, 130, 60, 0.3)');
+      halo.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, w, h);
       break;
     }
 
+    case 'memory-hourglass': {
+      grad.addColorStop(0, '#100e14');
+      grad.addColorStop(0.5, '#29202f');
+      grad.addColorStop(0.8, '#69435b');
+      grad.addColorStop(1, '#151119');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      break;
+    }
+
+    // 4. Nature Room
     case 'amazon-canopy': {
-      // Amazon Rainforest with golden Tyndall sunbeams
       grad.addColorStop(0, '#0a1710');
       grad.addColorStop(0.4, '#142e20');
       grad.addColorStop(0.7, '#234a34');
@@ -360,7 +239,6 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Golden Tyndall light rays
       const rays = ctx.createLinearGradient(w * 0.2, 0, w * 0.8, h);
       rays.addColorStop(0, 'rgba(255, 235, 150, 0.6)');
       rays.addColorStop(0.5, 'rgba(180, 230, 160, 0.25)');
@@ -372,70 +250,112 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
       ctx.lineTo(w * 0.85, h);
       ctx.lineTo(w * 0.6, h);
       ctx.fill();
-
-      // Lush foliage silhouette
-      ctx.fillStyle = '#060f0a';
-      ctx.beginPath();
-      ctx.arc(w * 0.15, h * 0.3, w * 0.2, 0, Math.PI * 2);
-      ctx.arc(w * 0.85, h * 0.25, w * 0.25, 0, Math.PI * 2);
-      ctx.fill();
       break;
     }
 
     case 'misty-pine': {
-      // Pacific Northwest Misty Pine Forest
       grad.addColorStop(0, '#101c18');
       grad.addColorStop(0.5, '#223830');
       grad.addColorStop(0.75, '#4a6b5e');
       grad.addColorStop(1, '#1b2923');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
-
-      // Pine tree silhouettes layered in mist
-      ctx.fillStyle = '#080d0b';
-      for (let i = 0; i < 7; i++) {
-        const x = w * (0.1 + i * 0.14);
-        ctx.beginPath();
-        ctx.moveTo(x, h * 0.82);
-        ctx.lineTo(x - w * 0.05, h * 0.82);
-        ctx.lineTo(x, h * (0.35 + (i % 3) * 0.08));
-        ctx.lineTo(x + w * 0.05, h * 0.82);
-        ctx.fill();
-      }
-
-      // Forest fog band
-      const fog = ctx.createLinearGradient(0, h * 0.5, 0, h * 0.75);
-      fog.addColorStop(0, 'rgba(200, 220, 215, 0.45)');
-      fog.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = fog;
-      ctx.fillRect(0, h * 0.5, w, h * 0.25);
       break;
     }
 
-    case 'emerald-rapids': {
-      // Canadian Rocky Mountain emerald glacial rapids
-      grad.addColorStop(0, '#0c1619');
-      grad.addColorStop(0.4, '#1b3238');
-      grad.addColorStop(0.7, '#2a6369');
-      grad.addColorStop(0.85, '#56b8b8');
-      grad.addColorStop(1, '#0e2428');
+    // 5. Urban Room
+    case 'urban-skyline': {
+      grad.addColorStop(0, '#080c16');
+      grad.addColorStop(0.5, '#121f33');
+      grad.addColorStop(0.8, '#3d304a');
+      grad.addColorStop(1, '#0c0e14');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Rapids foam waves
-      ctx.fillStyle = 'rgba(235, 250, 250, 0.75)';
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.85);
-      ctx.bezierCurveTo(w * 0.3, h * 0.8, w * 0.6, h * 0.9, w, h * 0.82);
-      ctx.lineTo(w, h * 0.92);
-      ctx.bezierCurveTo(w * 0.7, h * 0.98, w * 0.2, h * 0.88, 0, h * 0.95);
-      ctx.fill();
+      // Distant city lights
+      ctx.fillStyle = '#060a12';
+      for (let i = 0; i < 12; i++) {
+        const bh = h * (0.3 + (i % 5) * 0.1);
+        ctx.fillRect(w * (i * 0.08 + 0.02), h - bh, w * 0.07, bh);
+      }
+      break;
+    }
+
+    case 'urban-transit': {
+      grad.addColorStop(0, '#0a0a0f');
+      grad.addColorStop(0.5, '#1e1424');
+      grad.addColorStop(0.85, '#a6543b');
+      grad.addColorStop(1, '#120d14');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      break;
+    }
+
+    // 6. Abstract Room
+    case 'abstract-flow': {
+      grad.addColorStop(0, '#120d1c');
+      grad.addColorStop(0.3, '#351842');
+      grad.addColorStop(0.6, '#753b68');
+      grad.addColorStop(0.85, '#d48a74');
+      grad.addColorStop(1, '#1a101f');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      const swirl = ctx.createRadialGradient(w * 0.5, h * 0.5, 20, w * 0.5, h * 0.5, w * 0.4);
+      swirl.addColorStop(0, 'rgba(255, 210, 160, 0.9)');
+      swirl.addColorStop(0.4, 'rgba(180, 80, 140, 0.4)');
+      swirl.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = swirl;
+      ctx.fillRect(0, 0, w, h);
+      break;
+    }
+
+    // 7. Creation Lab
+    case 'creation-blueprint': {
+      grad.addColorStop(0, '#0c1524');
+      grad.addColorStop(0.5, '#14253d');
+      grad.addColorStop(1, '#0e1828');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      // Grid lines
+      ctx.strokeStyle = 'rgba(100, 180, 255, 0.15)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < w; x += 60) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = 0; y < h; y += 60) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      break;
+    }
+
+    // 8. Archive Room
+    case 'archive-scroll': {
+      grad.addColorStop(0, '#181410');
+      grad.addColorStop(0.5, '#2e241c');
+      grad.addColorStop(1, '#1a1512');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      const parchment = ctx.createLinearGradient(w * 0.2, 0, w * 0.8, h);
+      parchment.addColorStop(0, 'rgba(235, 210, 170, 0.4)');
+      parchment.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = parchment;
+      ctx.fillRect(0, 0, w, h);
       break;
     }
 
     default: {
-      grad.addColorStop(0, '#1a1a24');
-      grad.addColorStop(1, '#0c0c10');
+      grad.addColorStop(0, '#1c1b26');
+      grad.addColorStop(0.5, '#2b2938');
+      grad.addColorStop(1, '#14131c');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
       break;
@@ -444,42 +364,43 @@ function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, id: stri
 }
 
 function addPhotoAtmosphere(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  // Vignette
-  const vignette = ctx.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.45, w * 0.5, h * 0.5, Math.max(w, h) * 0.75);
+  const vignette = ctx.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.42, w * 0.5, h * 0.5, Math.max(w, h) * 0.76);
   vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.48)');
+  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.52)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, w, h);
 
-  // Subtle photo border line
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
   ctx.lineWidth = 2;
   ctx.strokeRect(16, 16, w - 32, h - 32);
 }
 
 export const GALLERY_ROOMS: RoomConfig[] = [
+  // Upper Floor (gridRow: 0)
   {
-    id: 'sanctuary',
-    name: '主展厅 · 典藏神庙',
-    enName: 'The Masterpiece Sanctuary',
-    description: '大尺度极简展厅，金色微光聚光灯下，代表作如纸张悬垂，静听时光流转。',
-    ambientLightColor: 0x18181c,
-    ambientIntensity: 0.85,
+    id: 'travel',
+    name: '旅行记忆室',
+    enName: 'Travel Room',
+    quote: '远方的风景，记忆的坐标。每一次旅行，都是生命的拓展。',
+    description: '双层错落透视长廊，雪山、峡谷与海岸，随微风飘拂。',
+    layoutType: 'angled-vista',
+    gridRow: 0,
+    gridCol: 0,
+    ambientLightColor: 0x1a1820,
+    ambientIntensity: 0.9,
     spotlightColor: 0xffeed6,
-    spotlightIntensity: 3.5,
-    wallColor: 0x121215,
-    floorRoughness: 0.45,
-    floorMetalness: 0.35,
-    windStrength: 0.12,
-    gravityStrength: 7.8,
+    spotlightIntensity: 3.4,
+    wallColor: 0x141419,
+    windStrength: 0.22,
+    gravityStrength: 7.6,
     items: [
       {
         id: 'golden-peak',
-        roomId: 'sanctuary',
+        roomId: 'travel',
         title: 'The Golden Peak',
         year: '2026',
         location: 'Matterhorn, Switzerland',
-        cameraInfo: 'Hasselblad H6D-100c · 100mm f/4 · 1/250s · ISO 64',
+        cameraInfo: 'Hasselblad H6D-100c · 100mm f/4 · 1/250s',
         preset: 'photoPaper',
         aspectRatio: 1.5,
         story: {
@@ -491,33 +412,32 @@ export const GALLERY_ROOMS: RoomConfig[] = [
       },
       {
         id: 'solitude-mist',
-        roomId: 'sanctuary',
+        roomId: 'travel',
         title: 'Solitude in Mist',
         year: '2025',
         location: 'Geiranger Fjord, Norway',
-        cameraInfo: 'Leica SL2 · 50mm f/1.4 Summilux · 1/60s · ISO 100',
+        cameraInfo: 'Leica SL2 · 50mm f/1.4 · 1/60s',
         preset: 'fineArtCanvas',
         aspectRatio: 1.45,
         story: {
           subtitle: '幽蓝峡湾与凝固的晨雾，孤独是最高贵的自省',
-          paragraph1: '盖朗厄尔峡湾的清晨被一层浓密而轻柔的水汽笼罩，静谧得如同世界的尽头。深黛色的悬崖倒映在如镜水面上，分不清哪里是天空，哪里是深渊。',
-          paragraph2: '使用艺术油画布质感展示这幅作品，使微弱水汽与冷灰蓝调呈现出如古典油画般的深邃质感与沉稳呼吸。',
+          paragraph1: '盖朗厄尔峡湾的清晨被一层浓密而轻柔的水汽笼罩，深黛色的悬崖倒映在如镜水面上，分不清哪里是天空，哪里是深渊。',
+          paragraph2: '艺术油画布质感使微弱水汽与冷灰蓝调呈现出如古典油画般的深邃质感与沉稳呼吸。',
           quote: '“在无声的静止中，我们听见世界最原始的律动。”',
         },
       },
       {
         id: 'dawn-monolith',
-        roomId: 'sanctuary',
+        roomId: 'travel',
         title: 'Dawn of the Monolith',
         year: '2024',
         location: 'Reynisfjara, Iceland',
-        cameraInfo: 'Sony A7R V · 24-70mm f/2.8 GM II · 1/125s · ISO 80',
+        cameraInfo: 'Sony A7R V · 24-70mm f/2.8 · 1/125s',
         preset: 'agedPaper',
         aspectRatio: 1.4,
         story: {
           subtitle: '黑沙滩上海浪与玄武岩巨石的亘古对峙',
           paragraph1: '大西洋狂烈的巨浪日夜拍击着雷尼斯黑沙滩，火山岩风化成的纯黑沙粒在破晓的暗红天光下泛着金属般的冷光。',
-          paragraph2: '玄武岩海蚀柱如巨人般傲然伫立于白浪之中。复古手工纸张的微卷边缘与温润纤维，为冰岛极北之地的苍凉注入了一抹岁月温度。',
           quote: '“浪潮退去，唯有岩石记录着永恒。”',
         },
       },
@@ -525,132 +445,115 @@ export const GALLERY_ROOMS: RoomConfig[] = [
   },
 
   {
-    id: 'wanderlust',
-    name: '旅行记忆室 · 行者无疆',
-    enName: 'Journey & Wanderlust',
-    description: '跨越洲际的旅途足迹，雨夜、沙漠与海岸，随微风飘扬的记忆碎片。',
-    ambientLightColor: 0x1a1618,
-    ambientIntensity: 0.9,
+    id: 'portrait',
+    name: '人物记忆室',
+    enName: 'Portrait Room',
+    quote: '面孔，情感，关系与陪伴。构成了我们记忆中最温暖的拼图。',
+    description: '360° 环形光柱悬挂布局，人物特写在中央光芒中环绕注视。',
+    layoutType: 'circular',
+    gridRow: 0,
+    gridCol: 1,
+    ambientLightColor: 0x1c171a,
+    ambientIntensity: 0.95,
     spotlightColor: 0xffdfc4,
-    spotlightIntensity: 3.2,
-    wallColor: 0x161315,
-    floorRoughness: 0.52,
-    floorMetalness: 0.25,
-    windStrength: 0.28,
-    gravityStrength: 7.2,
+    spotlightIntensity: 3.8,
+    wallColor: 0x161215,
+    windStrength: 0.12,
+    gravityStrength: 8.0,
     items: [
       {
-        id: 'kyoto-rain',
-        roomId: 'wanderlust',
-        title: 'Kyoto Rain',
+        id: 'portrait-elder',
+        roomId: 'portrait',
+        title: 'Wisdom of Centuries',
         year: '2026',
-        location: 'Gion, Kyoto, Japan',
-        cameraInfo: 'Fujifilm GFX 100 II · 45mm f/2.8 · 1/45s · ISO 800',
-        preset: 'silkFabric',
+        location: 'Kyoto, Japan',
+        cameraInfo: 'Fujifilm GFX 100 II · 110mm f/2 · 1/125s',
+        preset: 'agedPaper',
         aspectRatio: 1.35,
         story: {
-          subtitle: '细雨润湿的石板路，橙黄纸灯笼摇曳的幽玄时光',
-          paragraph1: '初春京都的黄昏突降细雨，祇园花见小路上的游人散去。雨水将黑色的花岗岩石板洗刷得如镜面般光洁，街巷两侧暖橙色的和纸灯笼在湿润空气中晕开温柔的光晕。',
-          paragraph2: '选用轻盈柔软的真丝织物作为呈现载体，布面随气流泛起轻盈涟漪，如同那夜微风吹拂屋檐风铃的轻响。',
-          quote: '“雨落无声，古都的长夜便在幽微中醒来。”',
+          subtitle: '岁月刻画的皱纹里，流淌着沉静如水的故事',
+          paragraph1: '百岁老茶师在和室暗光下静坐，深邃的眼神凝视着茶汤的微澜。光线勾勒出面庞每一道沧桑的肌理。',
+          quote: '“容颜会老去，但眼中的清澈可越千山。”',
         },
       },
       {
-        id: 'sahara-whisper',
-        roomId: 'wanderlust',
-        title: 'Sahara Whisper',
+        id: 'portrait-child',
+        roomId: 'portrait',
+        title: 'Wonder in the Eyes',
         year: '2025',
-        location: 'Erg Chebbi, Morocco',
-        cameraInfo: 'Canon EOS R5 · 70-200mm f/2.8L · 1/800s · ISO 100',
-        preset: 'agedPaper',
-        aspectRatio: 1.5,
+        location: 'Reykjavik, Iceland',
+        cameraInfo: 'Canon EOS R5 · 85mm f/1.2L · 1/320s',
+        preset: 'photoPaper',
+        aspectRatio: 1.38,
         story: {
-          subtitle: '千百年风沙雕琢的几何棱线与炽热光阴',
-          paragraph1: '撒哈拉深处的切比沙丘在夕阳斜射下呈现出梦幻般的双色对比：迎光面是灿烂的赤金，背光面则是深邃的紫红。',
-          paragraph2: '风在沙丘表面留下一道道如同水波般的优雅细纹，那是风走过的脚印。',
-          quote: '“沙漠从不言语，却向每一位行者诉说着时间的浩瀚。”',
+          subtitle: '纯真眼眸中倒映的初雪与世界',
+          paragraph1: '孩子抬头望向天空中纷飞的第一场初雪，清澈见底的瞳孔里写满了对未知世界最原始的惊叹与喜悦。',
+          quote: '“好奇心，是灵魂最明亮的光芒。”',
         },
       },
       {
-        id: 'pacific-coast',
-        roomId: 'wanderlust',
-        title: 'Pacific Coastline',
+        id: 'portrait-gaze',
+        roomId: 'portrait',
+        title: 'The Silent Gaze',
         year: '2024',
-        location: 'Big Sur, California, USA',
-        cameraInfo: 'Nikon Z8 · 24-120mm f/4 S · 1/320s · ISO 64',
-        preset: 'photoPaper',
-        aspectRatio: 1.48,
+        location: 'Paris, France',
+        cameraInfo: 'Leica M11 · 50mm f/1.4 · 1/160s',
+        preset: 'silkFabric',
+        aspectRatio: 1.4,
         story: {
-          subtitle: '加州一号公路悬崖之上，太平洋落日熔金的浪漫',
-          paragraph1: '沿着一号公路蜿蜒驶过大苏尔，悬崖之下碧蓝海水卷起层层雪白浪花。海平线处夕阳将整片天空染成由金黄渐变至粉紫的绝美幕布。',
-          paragraph2: '空气中弥漫着海盐与鼠尾草的香气，相纸在展厅微风中轻微起伏，如同重温那场无尽公路之旅。',
-          quote: '“驶向落日的方向，远方就是唯一的归宿。”',
+          subtitle: '塞纳河畔黄昏微光下的凝视',
+          paragraph1: '剧院散场后的长椅上，年轻演员独自伫立，夕阳给侧脸镀上一层柔和的金辉。',
+          quote: '“每一次静默的对视，都是心灵无声的相逢。”',
         },
       },
     ],
   },
 
   {
-    id: 'monochrome',
-    name: '黑白时光室 · 纯粹光影',
-    enName: 'Monochrome & Form',
-    description: '摒弃色彩喧嚣，回归结构、明暗与线条的纯粹力量。',
-    ambientLightColor: 0x141416,
-    ambientIntensity: 0.8,
-    spotlightColor: 0xffffff,
-    spotlightIntensity: 3.8,
-    wallColor: 0x0e0e10,
-    floorRoughness: 0.38,
-    floorMetalness: 0.45,
-    windStrength: 0.05,
-    gravityStrength: 8.5,
+    id: 'memory',
+    name: '记忆核心馆',
+    enName: 'Memory Sanctuary',
+    quote: '记忆的碎片，空间的重构。在这里，时间变得可触摸。',
+    description: '半环形殿堂神坛布局，金色光晕圆台烘托出庄严殿堂氛围。',
+    layoutType: 'semicircle',
+    gridRow: 0,
+    gridCol: 2,
+    ambientLightColor: 0x1f1a14,
+    ambientIntensity: 1.0,
+    spotlightColor: 0xffe6a8,
+    spotlightIntensity: 4.2,
+    wallColor: 0x17130e,
+    windStrength: 0.15,
+    gravityStrength: 7.5,
     items: [
       {
-        id: 'architectural-echoes',
-        roomId: 'monochrome',
-        title: 'Architectural Echoes',
-        year: '2025',
-        location: 'Berlin, Germany',
-        cameraInfo: 'Leica M11 Monochrom · 35mm f/2 APO · 1/500s · ISO 125',
-        preset: 'photoPaper',
-        aspectRatio: 1.4,
-        story: {
-          subtitle: '混凝土几何与斜射强光的交响，秩序的力量',
-          paragraph1: '包豪斯与粗野主义建筑在柏林交汇，午后强烈的直射阳光切过几何立面，创造出极具戏剧性的明暗对比。',
-          paragraph2: '黑白摄影剥离了色彩的干扰，让视觉焦点完全回归到几何构成、材质颗粒与光线的空间张力之中。',
-          quote: '“光创造了阴影，而阴影赋予了空间真实的存在。”',
-        },
-      },
-      {
-        id: 'violinist-hands',
-        roomId: 'monochrome',
-        title: 'The Violinist’s Hands',
-        year: '2023',
-        location: 'Musikverein, Vienna, Austria',
-        cameraInfo: 'Canon EOS R3 · 85mm f/1.2L · 1/200s · ISO 1600',
-        preset: 'fineArtCanvas',
-        aspectRatio: 1.38,
-        story: {
-          subtitle: '金色大厅后台暗处，五十载琴弦摩挲出的岁月刻痕',
-          paragraph1: '维也纳爱乐乐团演出前夕，首席小提琴家在微弱的后台暖光下调试琴弦。苍老而有力的指关节布满老茧，木质琴身在暗影中流淌出微弱光泽。',
-          paragraph2: '画布的哑光颗粒感与特写的黑白反差相得益彰，每一道纹理都在述说着对艺术一生的倾注与执着。',
-          quote: '“音符会消散于空气，但双手的温度永不褪色。”',
-        },
-      },
-      {
-        id: 'winter-branches',
-        roomId: 'monochrome',
-        title: 'Winter Branches',
+        id: 'memory-relic',
+        roomId: 'memory',
+        title: 'The Timeless Relic',
         year: '2026',
-        location: 'Biei, Hokkaido, Japan',
-        cameraInfo: 'Hasselblad 907X · 45mm f/4 · 1/640s · ISO 100',
+        location: 'Sanctuary Core',
+        cameraInfo: 'Master Archive · Quantum Film · ISO 50',
         preset: 'agedPaper',
-        aspectRatio: 1.5,
+        aspectRatio: 1.45,
         story: {
-          subtitle: '茫茫雪原之上，孤独冬木勾勒出的东方水墨意境',
-          paragraph1: '美瑛丘陵在暴风雪后化作一片无垠的留白。一株落光叶子的橡树独立于雪坡之上，枯枝在银白世界中如同墨笔在宣纸上的遒劲勾勒。',
-          paragraph2: '极简的构图与大面积纯净留白，带来无与伦比的宁静感，抚平所有世俗的喧嚣。',
-          quote: '“在极简之中，万物找回了它最本质的灵魂。”',
+          subtitle: '穿透时光尘埃的文明遗迹，永恒的回声',
+          paragraph1: '悬浮在神殿中央的核心遗存，凝聚了千百年来人类记忆与思索的结晶，在金色光晕中散发神圣微光。',
+          quote: '“时间带走一切，却将记忆铸成了不朽。”',
+        },
+      },
+      {
+        id: 'memory-hourglass',
+        roomId: 'memory',
+        title: 'Flow of Time',
+        year: '2025',
+        location: 'Sanctuary Chamber',
+        cameraInfo: 'Hasselblad 907X · 45mm · 1/500s',
+        preset: 'fineArtCanvas',
+        aspectRatio: 1.42,
+        story: {
+          subtitle: '沙漏落下的每一粒沙，都是宇宙呼吸的一瞬',
+          paragraph1: '光与暗交替流转，如同时间的河流奔涌不息。在此处，所有纷扰归于平静。',
+          quote: '“活在当下，当下即是永恒。”',
         },
       },
     ],
@@ -658,17 +561,19 @@ export const GALLERY_ROOMS: RoomConfig[] = [
 
   {
     id: 'nature',
-    name: '自然之境 · 绿意生机',
-    enName: 'Nature’s Breath',
-    description: '深入荒野雨林、冷杉峡谷与冰川激流，感受大自然的呼吸与脉动。',
-    ambientLightColor: 0x121a16,
+    name: '自然之境',
+    enName: 'Nature Realm',
+    quote: '回归自然，聆听大地的声音。记忆与自然共生共鸣。',
+    description: '林间有机错落分布，晨曦丁达尔光束穿透冠层。',
+    layoutType: 'staggered',
+    gridRow: 0,
+    gridCol: 3,
+    ambientLightColor: 0x121a14,
     ambientIntensity: 0.9,
     spotlightColor: 0xebffea,
-    spotlightIntensity: 3.4,
-    wallColor: 0x101512,
-    floorRoughness: 0.48,
-    floorMetalness: 0.3,
-    windStrength: 0.35,
+    spotlightIntensity: 3.5,
+    wallColor: 0x0f1612,
+    windStrength: 0.32,
     gravityStrength: 7.0,
     items: [
       {
@@ -676,14 +581,13 @@ export const GALLERY_ROOMS: RoomConfig[] = [
         roomId: 'nature',
         title: 'Amazonian Canopy',
         year: '2026',
-        location: 'Amazon Rainforest, Brazil',
-        cameraInfo: 'Sony A1 · 16-35mm f/2.8 GM · 1/160s · ISO 400',
+        location: 'Amazon, Brazil',
+        cameraInfo: 'Sony A1 · 16-35mm f/2.8 · 1/160s',
         preset: 'silkFabric',
         aspectRatio: 1.45,
         story: {
-          subtitle: '晨光穿透百米雨林冠层，丁达尔金色光柱倾泻而下',
-          paragraph1: '深入亚马逊原始流域清晨，密林上方升腾的湿热水汽在晨曦穿透时化作无数道神圣的金色光柱。数百万种生命在绿意中同时苏醒。',
-          paragraph2: '真丝素绉缎轻盈的质地随展厅微风柔顺起伏，仿佛将整个热带雨林的潮湿微风带到了展厅。',
+          subtitle: '晨光穿透百米雨林冠层，金色光柱倾泻而下',
+          paragraph1: '热带雨林湿润的水汽在晨曦穿透时化作神圣的光柱，数百万种生命在绿意中同时苏醒。',
           quote: '“森林的呼吸，是地球最古老而顽强的心跳。”',
         },
       },
@@ -692,31 +596,170 @@ export const GALLERY_ROOMS: RoomConfig[] = [
         roomId: 'nature',
         title: 'Misty Pine Forest',
         year: '2025',
-        location: 'Cascade Range, Oregon, USA',
-        cameraInfo: 'Fujifilm GFX 100S · 32-64mm f/4 · 1/80s · ISO 200',
+        location: 'Cascade Range, Oregon',
+        cameraInfo: 'Fujifilm GFX 100S · 32-64mm f/4 · 1/80s',
         preset: 'fineArtCanvas',
         aspectRatio: 1.4,
         story: {
-          subtitle: '太平洋西北部古老红杉与冷杉峡谷间的流动云雾',
-          paragraph1: '高耸入云的冷杉林静立于幽深山谷之中，太平洋吹来的水汽化为缭绕云雾，在针叶之间缓缓流淌。',
-          paragraph2: '深邃的森林暗绿与油画布的粗粝质感完美契合，带来深沉厚重的庇护感。',
+          subtitle: '太平洋西北部古老冷杉峡谷间的流动云雾',
+          paragraph1: '高耸入云的冷杉林静立于幽深山谷之中，海风吹来的水汽在针叶之间缓缓流淌。',
           quote: '“每一株古树，都是大地写给天空的长篇史诗。”',
         },
       },
+    ],
+  },
+
+  // Lower Floor (gridRow: 1)
+  {
+    id: 'urban',
+    name: '城市印象馆',
+    enName: 'Urban Echo',
+    quote: '城市是记忆的容器。每一条街道，都藏着故事的回声。',
+    description: '深邃天际线画廊布局，钢铁导轨与霓虹光影交相辉映。',
+    layoutType: 'linear',
+    gridRow: 1,
+    gridCol: 0,
+    ambientLightColor: 0x121622,
+    ambientIntensity: 0.85,
+    spotlightColor: 0xd8e8ff,
+    spotlightIntensity: 3.6,
+    wallColor: 0x0f131a,
+    windStrength: 0.16,
+    gravityStrength: 8.2,
+    items: [
       {
-        id: 'emerald-rapids',
-        roomId: 'nature',
-        title: 'Emerald Rapids',
-        year: '2024',
-        location: 'Banff National Park, Alberta, Canada',
-        cameraInfo: 'Nikon Z9 · 70-200mm f/2.8 VR S · 1/2000s · ISO 125',
+        id: 'urban-skyline',
+        roomId: 'urban',
+        title: 'Metropolis at Midnight',
+        year: '2026',
+        location: 'Tokyo, Japan',
+        cameraInfo: 'Nikon Z9 · 50mm f/1.2 · 1/60s',
         preset: 'photoPaper',
         aspectRatio: 1.5,
         story: {
-          subtitle: '冰川融水化作翡翠色狂流，奔腾激越的生命力量',
-          paragraph1: '班夫落基山脉冰川融化带来的矿物质使峡谷激流呈现出醉人的翡翠碧绿色。高速快门定格了激流撞击岩石时飞溅的晶莹水珠。',
-          paragraph2: '高光相纸的微反光泽精准再现了水波的通透与水花的剔透质感，极具视觉冲击力。',
-          quote: '“水奔流不息，以至柔克至刚，雕刻出大地的骨骼。”',
+          subtitle: '数百万盏灯火织就的钢铁巨兽之夜',
+          paragraph1: '站在摩天大楼顶端俯瞰，纵横交错的高速路如同奔流的金色血管，城市在喧嚣与孤独中不眠。',
+          quote: '“城市吞噬了星光，却自己点亮了银河。”',
+        },
+      },
+      {
+        id: 'urban-transit',
+        roomId: 'urban',
+        title: 'Speed of Light',
+        year: '2025',
+        location: 'New York, USA',
+        cameraInfo: 'Sony A7R V · 24mm f/1.4 · 2s · ISO 100',
+        preset: 'photoPaper',
+        aspectRatio: 1.48,
+        story: {
+          subtitle: '长曝光下流动的地铁光轨与穿行的人潮',
+          paragraph1: '地铁列车呼啸而过，留下炫目的橙红光轨，静止的乘客与飞驰的光线构成鲜明的存在对照。',
+          quote: '“我们奔赴前程，却在轨迹中留下了时间的痕迹。”',
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'abstract',
+    name: '抽象表达馆',
+    enName: 'Abstract Expression',
+    quote: '超越具象，进入情感的深层。抽象是记忆最自由的形态。',
+    description: '悬浮丝绸雕塑环抱布局，色彩与光晕自由流淌。',
+    layoutType: 'central-sculpture',
+    gridRow: 1,
+    gridCol: 1,
+    ambientLightColor: 0x1a121e,
+    ambientIntensity: 0.9,
+    spotlightColor: 0xf5d4ff,
+    spotlightIntensity: 3.8,
+    wallColor: 0x150f19,
+    windStrength: 0.35,
+    gravityStrength: 6.8,
+    items: [
+      {
+        id: 'abstract-flow',
+        roomId: 'abstract',
+        title: 'Resonance of Soul',
+        year: '2026',
+        location: 'Inner Dimension',
+        cameraInfo: 'Pure Consciousness · Spectral Light',
+        preset: 'silkFabric',
+        aspectRatio: 1.45,
+        story: {
+          subtitle: '色彩波动的狂欢，直击内心深处最纯粹的震颤',
+          paragraph1: '摒弃了一切具象形态，紫红与金光的交织如同情感在夜空中的绚烂绽放，带来无拘无束的心灵共鸣。',
+          quote: '“色彩是直接触摸灵魂的琴弓。”',
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'creation',
+    name: '创作工坊',
+    enName: 'Creation Lab',
+    quote: '记录，整理，创作，让记忆成为新的作品。',
+    description: '工作台与策展看板布局，实时导入与排版您的独家记忆。',
+    layoutType: 'studio-grid',
+    gridRow: 1,
+    gridCol: 2,
+    ambientLightColor: 0x141a22,
+    ambientIntensity: 0.92,
+    spotlightColor: 0xfff0da,
+    spotlightIntensity: 3.6,
+    wallColor: 0x10151c,
+    windStrength: 0.1,
+    gravityStrength: 8.0,
+    items: [
+      {
+        id: 'creation-blueprint',
+        roomId: 'creation',
+        title: 'Architect of Memories',
+        year: '2026',
+        location: 'Creative Studio',
+        cameraInfo: 'Studio Workshop · Blueprint Grid',
+        preset: 'fineArtCanvas',
+        aspectRatio: 1.4,
+        story: {
+          subtitle: '构想、草图与成品的诞生之地',
+          paragraph1: '在这里，灵感被精准捕捉并转化为空间的实体，每一位创作者都在书写属于自己的记忆篇章。',
+          quote: '“创作，就是给流逝的时间赋予新的生命。”',
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'archive',
+    name: '记忆存档馆',
+    enName: 'Memory Archive',
+    quote: '所有记忆的归处。安全存储，随时回溯。',
+    description: '展柜式网格矩阵布局，典藏每一刻珍贵时光。',
+    layoutType: 'archive-matrix',
+    gridRow: 1,
+    gridCol: 3,
+    ambientLightColor: 0x181512,
+    ambientIntensity: 0.88,
+    spotlightColor: 0xffeed6,
+    spotlightIntensity: 3.5,
+    wallColor: 0x14110e,
+    windStrength: 0.08,
+    gravityStrength: 8.5,
+    items: [
+      {
+        id: 'archive-scroll',
+        roomId: 'archive',
+        title: 'The Great Chronicle',
+        year: '2026',
+        location: 'Central Vault',
+        cameraInfo: 'Permanent Collection · Vault 01',
+        preset: 'agedPaper',
+        aspectRatio: 1.45,
+        story: {
+          subtitle: '封存百年光阴的记忆长卷，静候翻阅',
+          paragraph1: '无论时光如何飞逝，被珍藏的记忆在此处永不磨灭，随时等待与未来的你再次重逢。',
+          quote: '“被记住的时光，从未真正离去。”',
         },
       },
     ],

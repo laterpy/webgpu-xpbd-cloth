@@ -12,6 +12,14 @@ import { GALLERY_ROOMS } from '../gallery/GalleryManifest';
 import { HangingPhoto } from '../gallery/HangingPhoto';
 import { GalleryItemData } from '../gallery/GalleryItem';
 
+export type AppSpatialMode =
+  | 'entrance'
+  | 'corridor'
+  | 'doorTransition'
+  | 'inRoom'
+  | 'focus'
+  | 'exitTransition';
+
 export class App {
   private readonly container: HTMLElement;
   private renderer!: GalleryRenderer;
@@ -24,9 +32,12 @@ export class App {
   private focusOverlay!: FocusOverlay;
   private entranceOverlay!: EntranceOverlay;
 
-  private isFocusMode = false;
+  private spatialMode: AppSpatialMode = 'entrance';
+  private currentStationIndex = 0;
   private entranceProgress = 0;
   private isOpeningEntrance = false;
+  private doorTransitionProgress = 0;
+  private activeTransitionDoorIndex: number | null = null;
   private disposed = false;
 
   constructor(containerId = '#app') {
@@ -57,7 +68,17 @@ export class App {
 
     // Setup UI
     this.hud = new HUD(GALLERY_ROOMS, {
-      onRoomSelect: (roomIdx) => this.switchRoom(roomIdx),
+      onCorridorStep: (stationIdx) => {
+        if (stationIdx === -1) {
+          this.corridorBackward();
+        } else if (stationIdx === -2) {
+          this.corridorForward();
+        } else {
+          this.goToCorridorStation(stationIdx);
+        }
+      },
+      onEnterDoor: (doorIdx) => this.enterRoomViaDoor(doorIdx),
+      onReturnToCorridor: () => this.returnToCorridor(),
       onPhotoPrevious: () => this.previousPhoto(),
       onPhotoNext: () => this.nextPhoto(),
       onReset: () => this.resetActivePhoto(),
@@ -83,15 +104,25 @@ export class App {
     this.inputManager = new InputManager(
       this.renderer.domElement,
       this.cameraController.camera,
-      () => this.roomManager.getActivePhoto(),
+      this.roomManager,
       {
         onPhotoClick: (photo) => this.handlePhotoClick(photo),
+        onDoorClick: (doorIndex) => this.enterRoomViaDoor(doorIndex),
+        onOrbitDrag: (deltaX, deltaY) => this.cameraController.addOrbitOffset(deltaX, deltaY),
+        onRoomWalk: (distanceDelta) => this.cameraController.addRoomWalkOffset(
+          distanceDelta,
+          this.roomManager.getActiveRoom(),
+        ),
+        onCorridorForward: () => this.corridorForward(),
+        onCorridorBackward: () => this.corridorBackward(),
         onNavigatePrevious: () => this.previousPhoto(),
         onNavigateNext: () => this.nextPhoto(),
         onResetActive: () => this.resetActivePhoto(),
         onEscape: () => {
-          if (this.isFocusMode) {
+          if (this.spatialMode === 'focus') {
             this.setFocusMode(false);
+          } else if (this.spatialMode === 'inRoom') {
+            this.returnToCorridor();
           }
         },
       },
@@ -100,7 +131,12 @@ export class App {
     // Setup GameLoop
     this.gameLoop = new GameLoop(this.renderer.renderer, {
       onPhysicsStep: (dt, time) => {
-        this.roomManager.step(dt, time);
+        if (this.spatialMode === 'inRoom' || this.spatialMode === 'focus' || this.spatialMode === 'doorTransition') {
+          this.roomManager.step(dt, time);
+        }
+      },
+      onError: (error) => {
+        this.hud?.setError(`场景运行错误：${error instanceof Error ? error.message : String(error)}`);
       },
       onRenderFrame: (frameDt) => {
         if (this.isOpeningEntrance && this.entranceProgress < 1) {
@@ -108,12 +144,45 @@ export class App {
           this.world.setEntranceSlitOpenness(this.entranceProgress);
         }
 
+        // Handle Door Opening & Flight Transition into room
+        if (this.spatialMode === 'doorTransition' && this.activeTransitionDoorIndex !== null) {
+          this.doorTransitionProgress = Math.min(1, this.doorTransitionProgress + frameDt * 1.2);
+          this.roomManager.setDoorOpenProgress(this.activeTransitionDoorIndex, this.doorTransitionProgress);
+
+          if (this.doorTransitionProgress >= 1) {
+            this.spatialMode = 'inRoom';
+            this.cameraController.setMode('inRoom');
+            this.inputManager.setCorridorMode(false);
+            this.updateHUD();
+            this.hud.setStatus('展厅漫游 · W/S 或上下滚轮前后移动 · 空白处拖拽环视 · 照片可拖拽形变');
+          }
+        }
+
+        // Handle Exit Transition back to corridor
+        if (this.spatialMode === 'exitTransition' && this.activeTransitionDoorIndex !== null) {
+          this.doorTransitionProgress = Math.max(0, this.doorTransitionProgress - frameDt * 1.4);
+          this.roomManager.setDoorOpenProgress(this.activeTransitionDoorIndex, this.doorTransitionProgress);
+
+          if (this.doorTransitionProgress <= 0) {
+            this.spatialMode = 'corridor';
+            this.cameraController.setMode('corridor');
+            this.inputManager.setCorridorMode(true);
+            const corridorRoomIndex = this.activeTransitionDoorIndex;
+            this.activeTransitionDoorIndex = null;
+            this.roomManager.updateLOD(true, corridorRoomIndex ?? 0);
+            this.updateHUD();
+            this.hud.setStatus('中央艺术走廊 · W/S 或上下滚轮前后移动 · 走近展厅门推门进入');
+          }
+        }
+
         const activeRoom = this.roomManager.getActiveRoom();
         const activePhoto = this.roomManager.getActivePhoto();
         this.cameraController.updateTarget(
+          activeRoom,
           activePhoto,
-          activeRoom.group.position.x,
           this.entranceProgress,
+          this.doorTransitionProgress,
+          this.spatialMode === 'exitTransition',
         );
         this.cameraController.update(frameDt);
 
@@ -122,7 +191,8 @@ export class App {
     });
 
     this.setupResize();
-    this.updateHUD();
+    await this.warmupRoom(this.roomManager.getActiveRoomIndex());
+    this.goToCorridorStation(0);
   }
 
   start(): void {
@@ -131,41 +201,123 @@ export class App {
 
   private handleEnterGallery(): void {
     this.isOpeningEntrance = true;
-    this.cameraController.setMode('browse');
+    this.spatialMode = 'corridor';
+    this.cameraController.setMode('corridor');
+    this.inputManager.setCorridorMode(true);
 
-    // Trigger powerful initial room air gust
+    this.goToCorridorStation(0);
+    this.hud.setStatus('已进入中央艺术走廊 · 沿长廊漫步探索两旁展厅门');
+  }
+
+  private goToCorridorStation(stationIndex: number): void {
+    this.currentStationIndex = THREE.MathUtils.clamp(stationIndex, 0, this.roomManager.getStationCount() - 1);
+    const targetZ = this.roomManager.getStationZ(this.currentStationIndex);
+    this.cameraController.setCorridorTargetZ(targetZ);
+
+    this.roomManager.resetAllDoors();
+    this.roomManager.updateLOD(true, this.currentStationIndex * 2);
+    this.updateHUD();
+  }
+
+  private async warmupRoom(roomIndex: number): Promise<void> {
+    const room = this.roomManager.rooms[roomIndex];
+    if (!room) return;
+
+    const camera = this.cameraController.camera;
+    const previousPosition = camera.position.clone();
+    const previousQuaternion = camera.quaternion.clone();
+    const wasVisible = room.group.visible;
+
+    room.group.visible = true;
+    camera.position.set(room.group.position.x, 0.3, room.group.position.z + 8.5);
+    camera.lookAt(room.group.position.x, 0.3, room.group.position.z);
+    camera.updateMatrixWorld(true);
+
+    try {
+      await this.renderer.renderer.compileAsync(room.group, camera, this.world.scene);
+    } catch (error) {
+      console.warn('Room shader warmup skipped:', error);
+    } finally {
+      room.group.visible = wasVisible;
+      camera.position.copy(previousPosition);
+      camera.quaternion.copy(previousQuaternion);
+      camera.updateMatrixWorld(true);
+    }
+  }
+
+  private corridorForward(): void {
+    if (this.currentStationIndex < this.roomManager.getStationCount() - 1) {
+      this.goToCorridorStation(this.currentStationIndex + 1);
+    }
+  }
+
+  private corridorBackward(): void {
+    if (this.currentStationIndex > 0) {
+      this.goToCorridorStation(this.currentStationIndex - 1);
+    }
+  }
+
+  private enterRoomViaDoor(doorIndex: number): void {
+    if (this.spatialMode !== 'corridor') return;
+
+    this.spatialMode = 'doorTransition';
+    this.cameraController.setMode('doorTransition');
+    this.activeTransitionDoorIndex = doorIndex;
+    this.doorTransitionProgress = 0;
+
+    this.roomManager.setActiveRoomIndex(doorIndex);
     const activeRoom = this.roomManager.getActiveRoom();
+    this.cameraController.resetRoomView(activeRoom);
+    this.roomManager.updateLOD(false, doorIndex);
+
+    // Trigger powerful air gust as door pushes open
     activeRoom.applyImpulse(new THREE.Vector3(0, 0.4, 1.2));
 
-    this.hud.setStatus('已进入画廊 · 轻触照片开启故事');
+    this.hud.setStatus(`正在推门进入：${activeRoom.config.name}…`);
+  }
+
+  private returnToCorridor(): void {
+    if (this.spatialMode === 'focus') {
+      this.setFocusMode(false);
+    }
+
+    if (this.spatialMode === 'inRoom') {
+      this.spatialMode = 'exitTransition';
+      this.cameraController.setMode('exitTransition');
+      this.activeTransitionDoorIndex = this.roomManager.getActiveRoomIndex();
+      this.doorTransitionProgress = 1;
+      this.hud.setStatus('正在返回中央走廊…');
+    }
   }
 
   private handlePhotoClick(clickedPhoto: HangingPhoto): void {
+    if (this.spatialMode !== 'inRoom' && this.spatialMode !== 'focus') return;
+
     const activePhoto = this.roomManager.getActivePhoto();
     if (!activePhoto) return;
 
     if (clickedPhoto === activePhoto) {
       // Toggle Focus mode
-      this.setFocusMode(!this.isFocusMode);
+      this.setFocusMode(this.spatialMode !== 'focus');
     } else {
-      // Switch active photo to clicked
+      // Switch active photo in room
       const activeRoom = this.roomManager.getActiveRoom();
       const idx = activeRoom.photos.indexOf(clickedPhoto);
       if (idx !== -1) {
         activeRoom.setActiveIndex(idx);
-        this.roomManager.updateLOD();
+        this.roomManager.updateLOD(false, this.roomManager.getActiveRoomIndex());
         this.updateHUD();
       }
     }
   }
 
   private setFocusMode(focus: boolean): void {
-    this.isFocusMode = focus;
-    this.cameraController.setMode(focus ? 'focus' : 'browse');
-    this.roomManager.setStabilizing(focus);
-    this.hud.setFocusMode(focus);
-
     if (focus) {
+      this.spatialMode = 'focus';
+      this.cameraController.setMode('focus');
+      this.roomManager.setStabilizing(true);
+      this.hud.setFocusMode(true);
+
       const activePhoto = this.roomManager.getActivePhoto();
       const activeRoom = this.roomManager.getActiveRoom();
       if (activePhoto) {
@@ -177,47 +329,40 @@ export class App {
         this.hud.setStatus(`正在品读：《${activePhoto.data.title}》`);
       }
     } else {
+      this.spatialMode = 'inRoom';
+      this.cameraController.setMode('inRoom');
+      this.roomManager.setStabilizing(false);
+      this.hud.setFocusMode(false);
       this.focusOverlay.hide();
-      this.hud.setStatus('漫游模式 · 可自由切换与拖拽');
-    }
-  }
-
-  switchRoom(roomIndex: number): void {
-    if (this.isFocusMode) {
-      this.setFocusMode(false);
-    }
-    const switched = this.roomManager.switchRoom(roomIndex);
-    if (switched) {
-      this.inputManager.cancelActiveInteractions();
-      this.updateHUD();
-      const currentRoom = this.roomManager.getActiveRoom();
-      this.hud.setStatus(`已穿行至：${currentRoom.config.name}`);
+      this.hud.setStatus('展厅漫游 · 空白处拖拽环视 · 照片可拖拽形变');
     }
   }
 
   previousPhoto(): void {
+    if (this.spatialMode !== 'inRoom' && this.spatialMode !== 'focus') return;
     const activeRoom = this.roomManager.getActiveRoom();
     const curr = activeRoom.getActiveIndex();
     if (curr > 0) {
       this.inputManager.cancelActiveInteractions();
       activeRoom.setActiveIndex(curr - 1);
-      this.roomManager.updateLOD();
+      this.roomManager.updateLOD(false, this.roomManager.getActiveRoomIndex());
       this.updateHUD();
-      if (this.isFocusMode) {
+      if (this.spatialMode === 'focus') {
         this.setFocusMode(true);
       }
     }
   }
 
   nextPhoto(): void {
+    if (this.spatialMode !== 'inRoom' && this.spatialMode !== 'focus') return;
     const activeRoom = this.roomManager.getActiveRoom();
     const curr = activeRoom.getActiveIndex();
     if (curr < activeRoom.photos.length - 1) {
       this.inputManager.cancelActiveInteractions();
       activeRoom.setActiveIndex(curr + 1);
-      this.roomManager.updateLOD();
+      this.roomManager.updateLOD(false, this.roomManager.getActiveRoomIndex());
       this.updateHUD();
-      if (this.isFocusMode) {
+      if (this.spatialMode === 'focus') {
         this.setFocusMode(true);
       }
     }
@@ -246,13 +391,13 @@ export class App {
           roomId: this.roomManager.getActiveRoom().config.id,
           title: file.name.replace(/\.[^/.]+$/, ''),
           year: new Date().getFullYear().toString(),
-          location: 'Local Import · 本地收藏',
-          cameraInfo: 'Custom Upload · 独家作品',
+          location: 'Custom Creation · 个人典藏',
+          cameraInfo: 'Master Studio · 独家作品',
           preset: 'photoPaper',
           aspectRatio: aspect > 0 ? aspect : 1.5,
           story: {
-            subtitle: '用户专属珍藏记忆',
-            paragraph1: '由本地导入的独家影像，以 WebGPU XPBD 物理布料算法实时悬挂，赋予静态摄影鲜活的呼吸感。',
+            subtitle: '用户专属创作记忆',
+            paragraph1: '由创作工坊实时导入的独家影像，以 WebGPU XPBD 物理布料算法悬挂在空间之中，随光影与气流呼吸。',
             quote: '“每一张定格的照片，都是凝固的时间切片。”',
           },
           isCustom: true,
@@ -270,8 +415,11 @@ export class App {
   }
 
   private updateHUD(): void {
+    const isCorridor = this.spatialMode === 'corridor' || this.spatialMode === 'entrance';
     const activeRoom = this.roomManager.getActiveRoom();
     this.hud.updateState(
+      isCorridor,
+      this.currentStationIndex,
       this.roomManager.getActiveRoomIndex(),
       activeRoom.getActiveIndex(),
       activeRoom.photos.length,
