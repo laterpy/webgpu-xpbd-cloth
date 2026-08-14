@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
-import type { ClothSimulation } from '../cloth/ClothSimulation';
+import { HangingPhoto } from '../gallery/HangingPhoto';
+import { ClothSimulation } from '../cloth/ClothSimulation';
 
 export interface ClothGrabTarget {
   cloth: ClothSimulation;
@@ -15,19 +16,13 @@ export class ClothGrabber {
   private readonly localPoint = new THREE.Vector3();
   private readonly inverseWorldMatrix = new THREE.Matrix4();
   private activePointer: number | null = null;
-  private activeTarget: ClothGrabTarget | null = null;
+  private activeTarget: HangingPhoto | null = null;
 
   constructor(
     private readonly element: HTMLCanvasElement,
     private readonly camera: THREE.Camera,
-    private readonly getTarget: () => ClothGrabTarget | null,
-  ) {
-    element.addEventListener('pointerdown', this.onPointerDown);
-    element.addEventListener('pointermove', this.onPointerMove);
-    element.addEventListener('pointerup', this.onPointerUp);
-    element.addEventListener('pointercancel', this.onPointerUp);
-    element.addEventListener('lostpointercapture', this.onLostPointerCapture);
-  }
+    private readonly getTarget: () => HangingPhoto | null,
+  ) {}
 
   private updateRay(event: PointerEvent): void {
     const rect = this.element.getBoundingClientRect();
@@ -36,51 +31,41 @@ export class ClothGrabber {
     this.raycaster.setFromCamera(this.pointer, this.camera);
   }
 
-  private intersectTarget(event: PointerEvent, target: ClothGrabTarget): THREE.Vector3 | null {
+  intersectTarget(event: PointerEvent, target: HangingPhoto): THREE.Vector3 | null {
     this.updateRay(event);
-    target.transform.updateWorldMatrix(true, false);
-    this.worldPlane.copy(this.localPlane).applyMatrix4(target.transform.matrixWorld);
+    target.group.updateWorldMatrix(true, false);
+    this.worldPlane.copy(this.localPlane).applyMatrix4(target.group.matrixWorld);
     if (!this.raycaster.ray.intersectPlane(this.worldPlane, this.worldPoint)) return null;
-    this.inverseWorldMatrix.copy(target.transform.matrixWorld).invert();
+    this.inverseWorldMatrix.copy(target.group.matrixWorld).invert();
     return this.localPoint.copy(this.worldPoint).applyMatrix4(this.inverseWorldMatrix);
   }
 
-  private onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
-    const target = this.getTarget();
-    if (!target) return;
-    const point = this.intersectTarget(event, target);
-    if (!point) return;
-
+  startGrab(event: PointerEvent, target: HangingPhoto, point: THREE.Vector3): boolean {
     const index = target.cloth.vertexIndexFromLocal(point.x, point.y);
-    if (index === null) return;
-    if (!target.cloth.beginGrab(index, point)) return;
+    if (index === null) return false;
+    if (!target.cloth.beginGrab(index, point)) return false;
 
     this.activePointer = event.pointerId;
     this.activeTarget = target;
     this.element.setPointerCapture(event.pointerId);
     this.element.classList.add('is-grabbing');
+    return true;
+  }
 
-    event.preventDefault();
-  };
-
-  private onPointerMove = (event: PointerEvent): void => {
+  moveGrab(event: PointerEvent): void {
     if (this.activePointer !== event.pointerId || !this.activeTarget) return;
     const point = this.intersectTarget(event, this.activeTarget);
     if (!point) return;
     this.activeTarget.cloth.moveGrab(point);
-    event.preventDefault();
-  };
+  }
 
-  private onPointerUp = (event: PointerEvent): void => {
+  endGrab(event: PointerEvent): void {
     if (this.activePointer !== event.pointerId) return;
-    if (this.element.hasPointerCapture(event.pointerId)) this.element.releasePointerCapture(event.pointerId);
+    if (this.element.hasPointerCapture(event.pointerId)) {
+      this.element.releasePointerCapture(event.pointerId);
+    }
     this.cancelGrab();
-  };
-
-  private onLostPointerCapture = (event: PointerEvent): void => {
-    if (this.activePointer === event.pointerId) this.cancelGrab();
-  };
+  }
 
   get isGrabbing(): boolean {
     return this.activePointer !== null;
@@ -95,10 +80,5 @@ export class ClothGrabber {
 
   dispose(): void {
     this.cancelGrab();
-    this.element.removeEventListener('pointerdown', this.onPointerDown);
-    this.element.removeEventListener('pointermove', this.onPointerMove);
-    this.element.removeEventListener('pointerup', this.onPointerUp);
-    this.element.removeEventListener('pointercancel', this.onPointerUp);
-    this.element.removeEventListener('lostpointercapture', this.onLostPointerCapture);
   }
 }

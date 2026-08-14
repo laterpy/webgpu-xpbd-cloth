@@ -21,9 +21,13 @@ import {
   storage,
   uint,
   uniform,
+  vec2,
   vec3,
 } from 'three/tsl';
 import { assertValidColoring, buildCompressionBarriers, buildGridConstraints } from './constraints';
+import { ClothPresetConfig, getClothPreset } from '../physics/ClothPreset';
+
+export type SimulationTier = 'active' | 'reduced' | 'frozen';
 
 export interface ClothOptions {
   width?: number;
@@ -33,6 +37,7 @@ export interface ClothOptions {
   solverIterations?: number;
   gravity?: number;
   wind?: number;
+  preset?: ClothPresetConfig | string;
 }
 
 export class ClothSimulation {
@@ -48,11 +53,11 @@ export class ClothSimulation {
   readonly colorCount: number;
   readonly compressionBarrierCount: number;
   readonly compressionBarrierColorCount: number;
-  // Keep only a hint of slack between the two clips. Extreme portrait ratios
-  // must scale the inset down so the two attachment points never cross.
   readonly pinInset: number;
+  readonly preset: ClothPresetConfig;
 
   solverIterations: number;
+  simulationTier: SimulationTier = 'active';
 
   private readonly positionsAttribute: THREE.StorageBufferAttribute;
   private readonly normalsAttribute: THREE.StorageBufferAttribute;
@@ -70,11 +75,19 @@ export class ClothSimulation {
   private readonly timeUniform = uniform(0);
   private readonly gravityUniform = uniform(new THREE.Vector3(0, -7.8, 0));
   private readonly windUniform = uniform(0);
+  private readonly impulseUniform = uniform(new THREE.Vector3());
   private readonly airDragUniform = uniform(0.997);
   private readonly velocityDampingUniform = uniform(0.99);
   private readonly maxVelocityUniform = uniform(8);
   private readonly wallZUniform = uniform(-0.70);
 
+  // Hover micro-air-disturbance uniforms
+  private readonly hoverActiveUniform = uniform(0);
+  private readonly hoverPosUniform = uniform(new THREE.Vector2(0, 0));
+  private readonly hoverStrengthUniform = uniform(0);
+  private readonly hoverRadiusUniform = uniform(0.42);
+
+  // Grab uniforms
   private readonly grabActiveUniform = uniform(0);
   private readonly grabAnchorUniform = uniform(new THREE.Vector3());
   private readonly grabTargetUniform = uniform(new THREE.Vector3());
@@ -88,6 +101,12 @@ export class ClothSimulation {
   private selfCollisionCooldownSeconds = 0;
   private selfCollisionAccumulator = 0;
   private selfCollisionWasRelevant = false;
+
+  // Stabilization state for Focus Mode
+  private isStabilizing = false;
+  private stabilizationFactor = 0;
+  private impulseDecay = new THREE.Vector3();
+  private baseWind = 0;
 
   private readonly integrateCompute: unknown;
   private readonly velocityCompute: unknown;
@@ -115,6 +134,11 @@ export class ClothSimulation {
       return attribute;
     };
 
+    const presetConfig = typeof options.preset === 'string'
+      ? getClothPreset(options.preset)
+      : options.preset ?? getClothPreset('photoPaper');
+    this.preset = presetConfig;
+
     this.width = options.width ?? 4.8;
     this.height = options.height ?? 3.2;
     this.segmentsX = options.segmentsX ?? 32;
@@ -131,16 +155,14 @@ export class ClothSimulation {
     const normals = new Float32Array(this.vertexCount * 3);
     const velocities = new Float32Array(this.vertexCount * 3);
     const previous = new Float32Array(initial);
-    const invMass = new Float32Array(this.vertexCount).fill(1);
+    const invMass = new Float32Array(this.vertexCount).fill(1 / presetConfig.mass);
     const smallestGridSpacing = Math.min(
       this.width / Math.max(1, this.segmentsX),
       this.height / Math.max(1, this.segmentsY),
     );
     const perturbationAmplitude = Math.min(0.0025, smallestGridSpacing * 0.08);
 
-    // A microscopic deterministic out-of-plane perturbation breaks the exact
-    // planar symmetry, like real fabric imperfections. Constraint rest lengths
-    // are still computed from the perfectly flat rest shape.
+    // Microscopic deterministic out-of-plane perturbation
     for (let i = 0; i < this.vertexCount; i++) {
       const seed = Math.sin(i * 12.9898) * perturbationAmplitude;
       initial[i * 3 + 2] = seed;
@@ -148,7 +170,7 @@ export class ClothSimulation {
       normals[i * 3 + 2] = 1;
     }
 
-    // Two-corner hanging mode. Row 0 is the top row of PlaneGeometry.
+    // Two-corner hanging mode
     this.pinnedIndices = [0, this.segmentsX];
     for (const pin of this.pinnedIndices) invMass[pin] = 0;
 
@@ -168,22 +190,21 @@ export class ClothSimulation {
       new THREE.StorageBufferAttribute(new Float32Array(this.vertexCount * 3), 3),
     );
 
-    // The same GPU storage buffers are also the live render attributes.
     this.geometry.setAttribute('position', this.positionsAttribute);
     this.geometry.setAttribute('normal', this.normalsAttribute);
 
     const constraintSet = buildGridConstraints(rest, this.segmentsX, this.segmentsY, {
-      structural: 2e-7,
-      shear: 1.5e-6,
-      bend: 4.5e-4,
+      structural: presetConfig.structuralCompliance,
+      shear: presetConfig.shearCompliance,
+      bend: presetConfig.bendCompliance,
     });
     assertValidColoring(constraintSet);
     this.constraintCount = constraintSet.constraints.length;
     this.colorCount = constraintSet.colorCount;
 
     const compressionBarrierSet = buildCompressionBarriers(rest, this.segmentsX, this.segmentsY, {
-      minRatio: 0.65,
-      compliance: 1e-7,
+      minRatio: presetConfig.compressionBarrierRatio,
+      compliance: presetConfig.compressionBarrierCompliance,
     });
     assertValidColoring(compressionBarrierSet);
     this.compressionBarrierCount = compressionBarrierSet.constraints.length;
@@ -265,6 +286,7 @@ export class ClothSimulation {
     this.integrateCompute = Fn(() => {
       const i = instanceIndex;
       const p = positions.element(i);
+      const restP = restPositions.element(i);
       const v = velocitiesStorage.element(i);
       const oldP = previousPositions.element(i);
       const w = inverseMass.element(i);
@@ -272,8 +294,7 @@ export class ClothSimulation {
       oldP.assign(p);
 
       If(w.greaterThan(0), () => {
-        // Subtle spatially varying aerodynamic force. The cloth remains still
-        // at wind=0 and gets a non-uniform flutter instead of rigid translation.
+        // Natural aerodynamical non-uniform flutter
         const phase = p.x.mul(1.35).add(p.y.mul(0.55)).add(this.timeUniform.mul(1.7));
         const wind = vec3(
           sin(phase.mul(0.83)).mul(this.windUniform).mul(0.22),
@@ -281,9 +302,20 @@ export class ClothSimulation {
           cos(phase).mul(this.windUniform),
         );
 
+        // Hover micro-air-pressure perturbation
+        const hoverDelta = vec2(restP.x.sub(this.hoverPosUniform.x), restP.y.sub(this.hoverPosUniform.y));
+        const hoverDist = hoverDelta.length();
+        const hoverWeight = smoothstep(this.hoverRadiusUniform, this.hoverRadiusUniform.mul(0.2), hoverDist);
+        const hoverRipple = sin(hoverDist.mul(14.0).sub(this.timeUniform.mul(7.0)))
+          .mul(this.hoverStrengthUniform)
+          .mul(hoverWeight)
+          .mul(0.12);
+
+        const hoverForce = vec3(0, 0, hoverRipple.mul(this.hoverActiveUniform));
+
         v.mulAssign(this.airDragUniform);
-        v.addAssign(this.gravityUniform.add(wind).mul(this.dtUniform));
-        p.addAssign(v.mul(this.dtUniform));
+        v.addAssign(this.gravityUniform.add(wind).add(this.impulseUniform).mul(this.dtUniform));
+        p.addAssign(v.mul(this.dtUniform)).addAssign(hoverForce);
       }).Else(() => {
         v.assign(vec3(0));
       });
@@ -312,7 +344,6 @@ export class ClothSimulation {
         const alphaTilde = complianceStorage.element(ci).div(this.dtUniform.mul(this.dtUniform));
 
         If(wSum.add(alphaTilde).greaterThan(1e-9), () => {
-          // XPBD: Δλ = (-C - α~λ) / (Σw + α~)
           const deltaLambda = C.negate()
             .sub(alphaTilde.mul(lambda))
             .div(wSum.add(alphaTilde));
@@ -349,9 +380,6 @@ export class ClothSimulation {
         const C = len.sub(barrierMinDistanceStorage.element(ci));
         const alphaTilde = barrierComplianceStorage.element(ci).div(this.dtUniform.mul(this.dtUniform));
 
-        // This is an inequality XPBD constraint: a two-hop chord may stretch
-        // freely, but it cannot collapse below its safety length and form a
-        // needle-like local fold.
         If(and(C.lessThan(0), wSum.add(alphaTilde).greaterThan(1e-9)), () => {
           const proposedLambda = lambda.add(
             C.negate().sub(alphaTilde.mul(lambda)).div(wSum.add(alphaTilde)),
@@ -380,9 +408,6 @@ export class ClothSimulation {
 
       If(w.equal(0), () => {
         const target = restPositions.element(i).toVar();
-        // Pull the two clips slightly inward. The top edge has real geometric
-        // slack, so gravity can create a visible catenary-like drape instead of
-        // an unnaturally taut straight edge.
         If(i.equal(uint(this.pinnedIndices[0])), () => {
           target.x.addAssign(this.pinInset);
         });
@@ -399,14 +424,10 @@ export class ClothSimulation {
       const i = instanceIndex;
       const lambda = grabLambdas.element(i);
 
-      // Reset every particle's attachment lambda. Otherwise an old grab can
-      // leak impulses into the next interaction outside the current radius.
       if (resetLambda) lambda.assign(vec3(0));
 
       const p = positions.element(i);
       const w = inverseMass.element(i);
-      // Evaluate the radius in material/rest space so a folded layer cannot
-      // accidentally pull an unrelated layer that happens to be nearby.
       const restPoint = restPositions.element(i);
       const weight = float(1).sub(smoothstep(
         this.grabRadiusUniform.mul(0.35),
@@ -420,8 +441,6 @@ export class ClothSimulation {
 
       If(and(this.grabActiveUniform.greaterThan(0.5), w.greaterThan(0)), () => {
         If(weight.greaterThan(1e-3), () => {
-          // Copying the live pose at pointer-down means the target is a
-          // translation of the current drape, never a snap back to rest.
           const target = grabBasePositions.element(i).add(
             this.grabAppliedTargetUniform.sub(this.grabAnchorUniform),
           );
@@ -442,9 +461,6 @@ export class ClothSimulation {
     this.grabResetCompute = createGrabPass(true);
     this.grabSolveCompute = createGrabPass(false);
 
-    // GPU spatial hash for a practical cloth-thickness contact pass. The
-    // broad phase uses XY cells; every true 3D contact is still inside the
-    // same or a neighboring XY cell, then gets an exact 3D distance test.
     const selfCollisionCellSize = 0.16;
     const selfCollisionMargin = this.maxGrabOffset + 0.5;
     const selfCollisionMinX = -this.width / 2 - selfCollisionMargin;
@@ -578,8 +594,6 @@ export class ClothSimulation {
         }
       });
 
-      // Several nearby contacts can point in different directions. Cap the
-      // combined correction so one crowded frame cannot launch a vertex.
       const correctionLength = correction.length();
       selfCollisionCorrections.element(i).assign(
         correction.mul(float(selfCollisionMaxCorrection).div(correctionLength.max(selfCollisionMaxCorrection))),
@@ -615,8 +629,6 @@ export class ClothSimulation {
       If(w.greaterThan(0), () => {
         const rawVelocity = p.sub(oldP).div(this.dtUniform).toVar();
         const speed = rawVelocity.length().toVar();
-        // Contact and constraint corrections can otherwise turn a single
-        // aggressive drag frame into an unbounded rebound on release.
         v.assign(rawVelocity
           .mul(this.maxVelocityUniform.div(speed.max(this.maxVelocityUniform)))
           .mul(this.velocityDampingUniform));
@@ -626,8 +638,6 @@ export class ClothSimulation {
 
     })().compute(this.vertexCount).setName('XPBD Velocity');
 
-    // Four-neighbor normal reconstruction on GPU. PlaneGeometry row order is
-    // top-to-bottom, so "up" is y-1 in grid space.
     const left = new Uint32Array(this.vertexCount);
     const right = new Uint32Array(this.vertexCount);
     const up = new Uint32Array(this.vertexCount);
@@ -678,8 +688,6 @@ export class ClothSimulation {
 
     this.resetCompute = Fn(() => {
       const i = instanceIndex;
-      // Reset to the same subtly perturbed pose used at construction. The
-      // separate rest buffer remains perfectly planar for constraint lengths.
       positions.element(i).assign(initialPositions.element(i));
       previousPositions.element(i).assign(initialPositions.element(i));
       velocitiesStorage.element(i).assign(vec3(0));
@@ -688,33 +696,56 @@ export class ClothSimulation {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = 8;
 
-    // WebGPURenderer converts the classic MeshPhysicalMaterial into its node
-    // implementation internally, while preserving the familiar PBR API.
+    // Apply preset PBR physical properties
     this.material = new THREE.MeshPhysicalMaterial({
       map: texture,
       color: 0xffffff,
       side: THREE.DoubleSide,
-      roughness: 0.72,
-      metalness: 0.0,
-      clearcoat: 0.08,
-      clearcoatRoughness: 0.72,
-      sheen: 0.16,
-      sheenColor: new THREE.Color(0xfff3df),
-      sheenRoughness: 0.88,
-      ior: 1.46,
-      envMapIntensity: 0.9,
+      roughness: presetConfig.roughness,
+      metalness: presetConfig.metalness,
+      clearcoat: presetConfig.clearcoat,
+      clearcoatRoughness: presetConfig.clearcoatRoughness,
+      sheen: presetConfig.sheen,
+      sheenColor: presetConfig.sheenColor,
+      sheenRoughness: presetConfig.sheenRoughness,
+      ior: presetConfig.ior,
+      envMapIntensity: presetConfig.envMapIntensity,
     });
 
     this.mesh = new THREE.Mesh(this.geometry, this.material);
-    // The simulated sheet has no geometric thickness, so a sharp fold can cast
-    // an oversized silhouette onto the nearby wall. Direct lighting still shows
-    // the folds without that distracting black matte.
     this.mesh.castShadow = false;
     this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false;
 
     this.setGravity(options.gravity ?? 7.8);
-    this.setWind(options.wind ?? 0);
+    this.baseWind = options.wind ?? 0;
+    this.setWind(this.baseWind);
+  }
+
+  setSimulationTier(tier: SimulationTier): void {
+    this.simulationTier = tier;
+  }
+
+  getSimulationTier(): SimulationTier {
+    return this.simulationTier;
+  }
+
+  setHover(active: boolean, localX = 0, localY = 0, strength = 0.6, radius = 0.45): void {
+    this.hoverActiveUniform.value = active ? 1 : 0;
+    if (active) {
+      this.hoverPosUniform.value.set(localX, localY);
+      this.hoverStrengthUniform.value = strength;
+      this.hoverRadiusUniform.value = radius;
+    }
+  }
+
+  applyImpulse(impulse: THREE.Vector3): void {
+    this.impulseDecay.copy(impulse);
+    this.impulseUniform.value.copy(impulse);
+  }
+
+  setStabilizing(stabilizing: boolean): void {
+    this.isStabilizing = stabilizing;
   }
 
   setGravity(magnitude: number): void {
@@ -722,7 +753,10 @@ export class ClothSimulation {
   }
 
   setWind(strength: number): void {
-    this.windUniform.value = Math.max(0, strength);
+    this.baseWind = Math.max(0, strength);
+    if (!this.isStabilizing) {
+      this.windUniform.value = this.baseWind * this.preset.windMultiplier;
+    }
   }
 
   setTexture(texture: THREE.Texture): void {
@@ -768,19 +802,11 @@ export class ClothSimulation {
     map?.dispose();
     this.material.dispose();
 
-    // Geometry releases its render relationships first. Every storage buffer
-    // is then deleted explicitly because reset compute can allocate position
-    // and normal before the geometry has ever participated in a render pass.
-    // The Set, idempotent attribute manager and disposed guard prevent repeats.
     this.geometry.dispose();
     const rendererAttributes = (renderer as unknown as {
       _attributes?: { delete: (attribute: THREE.StorageBufferAttribute) => unknown };
     } | undefined)?._attributes;
     for (const attribute of this.ownedStorageAttributes) {
-      // Three r185 does not wire StorageBufferAttribute.dispose() to the
-      // renderer's compute-only attribute manager. Delete every owned buffer:
-      // this is also needed when reset fails before geometry has ever rendered,
-      // and Attributes.delete() is idempotent for render-owned buffers.
       rendererAttributes?.delete(attribute);
       attribute.dispose();
     }
@@ -815,9 +841,6 @@ export class ClothSimulation {
   moveGrab(target: THREE.Vector3): void {
     if (this.grabActiveUniform.value <= 0.5) return;
 
-    // A two-corner hanging sheet has a finite reachable region. Bounding the
-    // requested offset avoids injecting an impossible amount of strain while
-    // still leaving a generous interactive drag range.
     this.grabStepDelta.copy(target).sub(this.grabAnchorUniform.value);
     this.grabStepDelta.z = 0;
     if (this.grabStepDelta.lengthSq() > this.maxGrabOffset ** 2) {
@@ -838,17 +861,42 @@ export class ClothSimulation {
     this.selfCollisionCooldownSeconds = 0;
     this.selfCollisionAccumulator = 0;
     this.selfCollisionWasRelevant = false;
+    this.hoverActiveUniform.value = 0;
+    this.impulseUniform.value.set(0, 0, 0);
     renderer.compute(this.resetCompute);
     renderer.compute(this.enforcePinsCompute);
     renderer.compute(this.normalCompute);
   }
 
   step(renderer: THREE.WebGPURenderer, dt: number, time: number): void {
+    if (this.simulationTier === 'frozen') return;
+
     this.dtUniform.value = dt;
     this.timeUniform.value = time;
     const stepRatio = dt / (1 / 60);
-    this.airDragUniform.value = Math.pow(0.997, stepRatio);
-    this.velocityDampingUniform.value = Math.pow(0.99, stepRatio);
+
+    // Smooth focus stabilization: increase damping to absorb oscillations, fade wind
+    if (this.isStabilizing) {
+      this.stabilizationFactor = Math.min(1, this.stabilizationFactor + dt * 2.5);
+    } else {
+      this.stabilizationFactor = Math.max(0, this.stabilizationFactor - dt * 2.5);
+    }
+
+    const currentAirDrag = THREE.MathUtils.lerp(this.preset.airDrag, 0.985, this.stabilizationFactor);
+    const currentVelocityDamping = THREE.MathUtils.lerp(this.preset.velocityDamping, 0.94, this.stabilizationFactor);
+    const currentWind = THREE.MathUtils.lerp(this.baseWind * this.preset.windMultiplier, 0, this.stabilizationFactor);
+
+    this.airDragUniform.value = Math.pow(currentAirDrag, stepRatio);
+    this.velocityDampingUniform.value = Math.pow(currentVelocityDamping, stepRatio);
+    this.windUniform.value = currentWind;
+
+    // Decay external air impulse smoothly
+    if (this.impulseDecay.lengthSq() > 1e-5) {
+      this.impulseDecay.multiplyScalar(Math.pow(0.88, stepRatio));
+      this.impulseUniform.value.copy(this.impulseDecay);
+    } else {
+      this.impulseUniform.value.set(0, 0, 0);
+    }
 
     if (this.grabActiveUniform.value > 0.5) {
       this.grabStepDelta.copy(this.grabTargetUniform.value).sub(this.grabAppliedTargetUniform.value);
@@ -865,9 +913,15 @@ export class ClothSimulation {
 
     renderer.compute(this.integrateCompute);
 
-    const selfCollisionIsRelevant = this.grabActiveUniform.value > 0.5
+    const isInteractive = this.grabActiveUniform.value > 0.5;
+    const isReduced = this.simulationTier === 'reduced';
+    const iterations = isReduced ? Math.min(3, this.solverIterations) : this.solverIterations;
+
+    const selfCollisionIsRelevant = !isReduced && (
+      isInteractive
       || this.selfCollisionCooldownSeconds > 0
-      || this.windUniform.value > 0.2;
+      || this.windUniform.value > 0.25
+    );
     this.selfCollisionCooldownSeconds = Math.max(0, this.selfCollisionCooldownSeconds - dt);
     const selfCollisionInterval = 1 / 30;
     if (selfCollisionIsRelevant) {
@@ -877,34 +931,27 @@ export class ClothSimulation {
     } else {
       this.selfCollisionAccumulator = 0;
     }
-    // A time-based 30 Hz contact update gives active and throttled neighbors
-    // the same collision cadence even though their cloth steps use different dt.
+
     const runSelfCollision = selfCollisionIsRelevant
       && this.selfCollisionAccumulator >= selfCollisionInterval - 1e-6;
-    if (runSelfCollision) this.selfCollisionAccumulator = Math.max(
-      0,
-      this.selfCollisionAccumulator - selfCollisionInterval,
-    );
+    if (runSelfCollision) {
+      this.selfCollisionAccumulator = Math.max(0, this.selfCollisionAccumulator - selfCollisionInterval);
+    }
     this.selfCollisionWasRelevant = selfCollisionIsRelevant;
-    const selfCollisionIteration = Math.max(0, this.solverIterations - 2);
+    const selfCollisionIteration = Math.max(0, iterations - 2);
 
-    for (let iteration = 0; iteration < this.solverIterations; iteration++) {
+    for (let iteration = 0; iteration < iterations; iteration++) {
       const passes = iteration === 0 ? this.constraintResetComputes : this.constraintSolveComputes;
       for (const pass of passes) renderer.compute(pass);
       renderer.compute(iteration === 0 ? this.grabResetCompute : this.grabSolveCompute);
 
       if (iteration === selfCollisionIteration) {
-        // The fold guard is only needed while input or wind can create a
-        // sharp fold. Solving it twice here is much cheaper than running it
-        // in every distance-constraint iteration.
         if (selfCollisionIsRelevant) {
           for (const pass of this.compressionBarrierResetComputes) renderer.compute(pass);
           for (const pass of this.compressionBarrierSolveComputes) renderer.compute(pass);
         }
 
         if (runSelfCollision) {
-          // These are deliberately separate dispatches: atomics only make
-          // hash insertion safe; they do not synchronize all GPU workgroups.
           renderer.compute(this.selfCollisionClearCompute);
           renderer.compute(this.selfCollisionHashCompute);
           renderer.compute(this.selfCollisionResolveCompute);
